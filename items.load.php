@@ -1603,12 +1603,29 @@ function open_move_group_div()
     // check if read only or forbidden
     if (RecupComplexite($('#hid_cat').val(), 0) == 0) return false;
 
-    //Select the actual forlder in the dialogbox
-    $('#move_folder_id option[value='+$('#hid_cat').val()+']').prop('selected', true);
+	filter_current_selected('#move_folder_id', $('#hid_cat').val());
     $('#move_folder_title').html($.trim($('#move_folder_id :selected').text())+"[id"+$('#hid_cat').val()+"]");
     $('#move_folder_id').val(0);
     $('#div_move_folder').dialog('open');
     $("#div_loading").hide();
+}
+
+
+function filter_current_selected(_selectListId, _item)	{
+	var startIdentLevel, startFound = false;
+	$(_selectListId+" > option").each(function() {
+		if(this.value == _item)	{
+			this.attr('disabled', 'disabled');
+			startFound = true;
+			startIdentLevel = this.text.search(/\S|$/);
+		} else if(startFound)	{
+			if(this.text.search(/\S|$/) > startIdentLevel)	{
+				this.attr('disabled', 'disabled');
+			} else {
+				return false;
+			}
+		}
+	});
 }
 
 //###########

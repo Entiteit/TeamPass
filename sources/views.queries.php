@@ -58,6 +58,152 @@ $tree = new Tree\NestedTree\NestedTree(prefix_table("nested_tree"), 'id', 'paren
 //Constant used
 $nbElements = 20;
 
+function folderEmpty(&$folderId)	{
+	$rows = DB::query(
+		"SELECT id FROM ".prefix_table("nested_tree")." WHERE id != 0 AND parent_id=(SELECT parent_id FROM ".prefix_table("nested_tree")." WHERE id=%i)",
+		 $folderId
+	);
+	return (count($rows)<1);
+}
+
+function restore_folder($id, $recurse)	{
+	$data = DB::queryfirstrow(
+		"SELECT valeur
+		FROM ".prefix_table("misc")."
+		WHERE type = 'folder_deleted'
+		AND intitule = %s",
+		$id
+	);
+	if ($data['valeur'] != 0) {
+		$folderData = explode(', ', $data['valeur']);
+		
+		// Check parent folder
+		$parentFolderId = $folderData[1];
+		if(!checkParentFolderExists($parentFolderId))	{
+			restore_folder('f'.$parentFolderId, false);
+		}
+
+		//insert deleted folder
+		DB::insert(
+			prefix_table("nested_tree"),
+			array(
+				'id' => $folderData[0],
+				'parent_id' => $parentFolderId,
+				'title' => $folderData[2],
+				'nleft' => $folderData[3],
+				'nright' => $folderData[4],
+				'nlevel' => $folderData[5],
+				'bloquer_creation' => $folderData[6],
+				'bloquer_modification' => $folderData[7],
+				'personal_folder' => $folderData[8],
+				'renewal_period' => $folderData[9]
+		   )
+		);
+		//delete log
+		DB::delete(prefix_table("misc"), "type = %s AND intitule = %s", "folder_deleted", $id);
+
+		if($recurse == true)	{
+		
+			$realId = substr($id, 1);
+
+			// Restore subitems
+			$children = DB::query(
+				"SELECT id
+				FROM ".prefix_table("items")."
+				WHERE inactif = '1'
+				AND id_tree = %s",
+				$realId
+			);
+			if (count($children) >0) {
+				foreach ($children as $child) {
+					restore_item($child['id']);
+				}
+			}
+
+			// Restore subfolders
+			$children = DB::query(
+				"SELECT intitule
+				FROM ".prefix_table("misc")."
+				WHERE type = 'folder_deleted'
+				AND valeur RLIKE '^[0-9]+, ".$realId.", [[:alnum:]]+, [0-9]+, [0-9]+, [0-9]+, [0-9]+, [0-9]+, [0-9]+, [0-9]+$'"
+			);
+			if (count($children) >0) {
+				foreach ($children as $child) {
+					restore_folder($child['intitule'], true);
+				}
+			}
+		}
+	}
+}
+
+function getFolderName($folder_Id)	{
+	$rows = DB::query(
+		"SELECT title FROM ".prefix_table("nested_tree")." WHERE id = %i",
+		$folder_Id
+	);
+	if(count($rows)>0)	{
+		return $rows[0]['title'];
+	}
+	
+	// Deleted folder
+	$rows = DB::query(
+		"SELECT valeur
+		FROM ".prefix_table("misc")."
+		wHERE type = 'folder_deleted'
+		AND intitule = %s",
+		'f'.$folder_Id
+	);
+	if(count($rows)>0)	{
+		$folderData = explode(', ', $rows[0]['valeur']);
+		return '('.$folderData[2].')';
+	}
+	
+	return 'FIXME!';
+}
+
+function checkParentFolderExists($folderId)	{
+	$rows = DB::query(
+		"SELECT id
+		FROM ".prefix_table("nested_tree")."
+		WHERE id = %i",
+		$folderId
+	);
+	return (count($rows)>0);
+}
+
+function restore_item($id)	{
+	
+	// Check parent folder
+	$parentFolderId = DB::queryfirstrow(
+		"SELECT id_tree FROM ".prefix_table("items")." WHERE id = %i",
+		$id
+	)['id_tree'];
+	
+	if(!checkParentFolderExists($parentFolderId))	{
+		restore_folder('f'.$parentFolderId, false);
+	}
+	
+	DB::update(
+		prefix_table("items"),
+		array(
+			'inactif' => '0'
+		),
+		'id = %i',
+		$id
+	);
+	//log
+	DB::insert(
+		prefix_table("log_items"),
+		array(
+			"id_item" => $id,
+			"date" => time(),
+			"id_user" => $_SESSION['user_id'],
+			"action" => "at_restored"
+		)
+	);
+}
+
+
 // Construction de la requ?te en fonction du type de valeur
 switch ($_POST['type']) {
     #CASE generating the log for passwords renewal
@@ -132,9 +278,9 @@ switch ($_POST['type']) {
         );
         foreach ($rows as $record) {
             $tmp = explode(', ', $record['valeur']);
-            $texte .= '<tr><td><input type=\'checkbox\' class=\'cb_deleted_folder\' value=\''.$record['intitule'].'\' id=\'folder_deleted_'.$record['intitule'].'\' />&nbsp;<b>'.
-                $tmp[2].'</b></td><td><input type=\"hidden\" value=\"'.$record['valeur'].'\"></td></tr>';
-            $arrFolders[substr($record['intitule'], 1)] = $tmp[2];
+			$parentFolderId = $tmp[1];
+            $texte .= '<tr><td><input type=\'checkbox\' class=\'cb_deleted_folder\' value=\''.$record['intitule'].'\' id=\'folder_deleted_'.$record['intitule'].'\' />&nbsp;<b>'.$tmp[2].'</b></td><td><input type=\"hidden\" value=\"'.$record['valeur'].'\"></td><td width=\"70px\" align=\"center\">'.getFolderName($parentFolderId).'</td></tr>';
+			$arrFolders[substr($record['intitule'], 1)] = $tmp[2];
         }
 
         //ITEMS deleted
@@ -161,7 +307,9 @@ switch ($_POST['type']) {
                 $thisFolder = "";
             }
 
-            $texte .= '<tr><td><input type=\'checkbox\' class=\'cb_deleted_item\' value=\''.$record['id'].'\' id=\'item_deleted_'.$record['id'].'\' />&nbsp;<b>'.$record['label'].'</b></td><td width=\"100px\" align=\"center\">'.date($_SESSION['settings']['date_format'], $record['date']).'</td><td width=\"70px\" align=\"center\">'.$record['login'].'</td>'.$thisFolder.'</tr>';
+			$parentFolderId = $record['id_tree'];
+			
+            $texte .= '<tr><td><input type=\'checkbox\' class=\'cb_deleted_item\' value=\''.$record['id'].'\' id=\'item_deleted_'.$record['id'].'\' />&nbsp;<b>'.$record['label'].'</b></td><td width=\"100px\" align=\"center\">'.date($_SESSION['settings']['date_format'], $record['date']).'</td><td width=\"70px\" align=\"center\">'.$record['login'].'</td><td width=\"70px\" align=\"center\">'.getFolderName($parentFolderId).'</td>'.$thisFolder.'</tr>';
         }
 
         echo '[{"text":"'.$texte.'</table><div style=\'margin-left:5px;\'><input type=\'checkbox\' id=\'item_deleted_select_all\' />&nbsp;&nbsp;<a class=\"button\" onclick=\"$(\'#tab2_action\').val(\'restoration\');OpenDialog(\'tab2_dialog\');console.log(\'coucou\');\"><i class=\"fa fa-undo fa-lg\"></i>&nbsp;'.$LANG['restore'].'</a>&nbsp;&nbsp;<a class=\"button\" onclick=\"$(\'#tab2_action\').val(\'deletion\');OpenDialog(\'tab2_dialog\')\"><i class=\"fa fa-trash-o fa-lg\"></i>&nbsp;'.$LANG['delete'].'</a></div>"}]';
@@ -174,57 +322,13 @@ switch ($_POST['type']) {
         //restore FOLDERS
         if (count($_POST['list_f'])>0) {
             foreach (explode(';', $_POST['list_f']) as $id) {
-                $data = DB::queryfirstrow(
-                    "SELECT valeur
-                    FROM ".prefix_table("misc")."
-                    WHERE type = 'folder_deleted'
-                    AND intitule = %s",
-                    $id
-                );
-                if ($data['valeur'] != 0) {
-                    $folderData = explode(', ', $data['valeur']);
-                    //insert deleted folder
-                    DB::insert(
-                        prefix_table("nested_tree"),
-                        array(
-                            'id' => $folderData[0],
-                            'parent_id' => $folderData[1],
-                            'title' => $folderData[2],
-                            'nleft' => $folderData[3],
-                            'nright' => $folderData[4],
-                            'nlevel' => $folderData[5],
-                            'bloquer_creation' => $folderData[6],
-                            'bloquer_modification' => $folderData[7],
-                            'personal_folder' => $folderData[8],
-                            'renewal_period' => $folderData[9]
-                       )
-                    );
-                    //delete log
-                    DB::delete(prefix_table("misc"), "type = %s AND intitule = %s", "folder_deleted", $id);
-                }
+                restore_folder($id, true);
             }
         }
         //restore ITEMS
         if (count($_POST['list_i'])>0) {
             foreach (explode(';', $_POST['list_i']) as $id) {
-                DB::update(
-                    prefix_table("items"),
-                    array(
-                        'inactif' => '0'
-                    ),
-                    'id = %i',
-                    $id
-                );
-                //log
-                DB::insert(
-                    prefix_table("log_items"),
-                    array(
-                        "id_item" => $id,
-                        "date" => time(),
-                        "id_user" => $_SESSION['user_id'],
-                        "action" => "at_restored"
-                    )
-                );
+				restore_item($id);
             }
         }
         break;
@@ -263,7 +367,9 @@ switch ($_POST['type']) {
                     $_SESSION['nb_folders'] --;
                 }
                 //delete folder
-                DB::delete(prefix_table("misc"), "intitule = %s AND type = %s", $fId, "folder_deleted");
+                if (folderEmpty($fId)) {
+	                DB::delete(prefix_table("misc"), "intitule = %s AND type = %s", $fId, "folder_deleted");
+                }
             }
         }
 
