@@ -1614,13 +1614,14 @@ function open_move_group_div()
 function filter_current_selected(_selectListId, _item)	{
 	var startIdentLevel, startFound = false;
 	$(_selectListId+" > option").each(function() {
+		console.log("this: "+this);
 		if(this.value == _item)	{
-			this.attr('disabled', 'disabled');
+			this.disabled = true;
 			startFound = true;
 			startIdentLevel = this.text.search(/\S|$/);
 		} else if(startFound)	{
 			if(this.text.search(/\S|$/) > startIdentLevel)	{
-				this.attr('disabled', 'disabled');
+				this.disabled = true;
 			} else {
 				return false;
 			}
